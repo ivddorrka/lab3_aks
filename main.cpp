@@ -92,6 +92,8 @@ void splittedIntoVec(const std::string &str, std::map<std::string, std::size_t> 
     boost::split(v1,str,isspace);
     size_t startNum = 1;
     for (auto & i : v1) {
+        std::transform(i.begin(), i.end(), i.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
         auto toFind = mapProm.find(i);
         if ( toFind != mapProm.end() ) {
             toFind->second += 1;
@@ -102,8 +104,108 @@ void splittedIntoVec(const std::string &str, std::map<std::string, std::size_t> 
 }
 
 
+// sort by second -> sort by numbers
+bool sortbysec(const std::pair<std::string, size_t> &a,
+                 const std::pair<std::string, size_t> &b)
+{
+    return (a.second < b.second);
+}
+
+
+// comparison by the word - to sort alphabetically
+bool sortbyfirst(const std::pair<std::string, size_t> &a,
+                 const std::pair<std::string, size_t> &b)
+{
+    return (a.first < b.first);
+}
+
+// write to file out_by_a which in alphabetic order
+void writeToFileA(size_t vecSize, const std::vector<std::string> &wordA, const std::map<std::string, std::size_t> &mainMap, const std::string &filePathA){
+    std::ofstream myfile;
+    size_t count;
+    myfile.open(filePathA);
+    for (size_t j=0; j<vecSize; ++j) {
+        auto toFind = mainMap.find(wordA[j]);
+        count = toFind->second;
+        myfile << wordA[j] << " : " << count << "\n";
+    }
+    myfile.close();
+
+}
+
+
+
+
+
+// Write to file in ascending order - if some words happen the same amount of times ->
+// they will be written in alphabetic order
+
+void writeToFileB(size_t vecSize, const std::vector<std::pair<std::string, std::size_t>> &wordB, const std::map<std::string, std::size_t> &mainMap, const std::string &filePathB){
+    std::vector<std::vector<std::pair<std::string, size_t>>> vecSplitted;
+    std::vector<std::pair<std::string, std::size_t>> promOne;
+
+    promOne.emplace_back(std::make_pair(wordB[0].first, wordB[0].second));
+
+    for (size_t i =1; i < vecSize; ++i) {
+
+        if (wordB[i-1].second == wordB[i].second) {
+            promOne.emplace_back(std::make_pair(wordB[i].first, wordB[i].second));
+            if (i == vecSize-1) {
+                vecSplitted.emplace_back(promOne);
+            }
+        } else {
+            vecSplitted.emplace_back(promOne);
+            promOne.clear();
+            promOne.emplace_back(std::make_pair(wordB[i].first, wordB[i].second));
+        }
+    }
+
+    std::ofstream myfile;
+    size_t count;
+    myfile.open(filePathB);
+
+    for (auto & j : vecSplitted) {
+
+        std::sort(j.begin(), j.end(), sortbyfirst);
+
+        for (auto & pairIn : j) {
+
+            myfile << pairIn.first << " : " << pairIn.second << "\n";
+
+        }
+    }
+    myfile.close();
+}
+
+
+bool compareString (std::string &s1, std::string &s2) {
+    if (s1<s2) {
+        return true;
+    }
+    return false;
+}
+
+
+
+// sometimes in .cfg file parameters start with " and end with it
+// this would spoil the searching in directory process
+// and correct file saving for further usage
+
+void stringRefactor (std::string &str) {
+    size_t lenn = str.length();
+    std::string resStr;
+    for (size_t i = 0; i < lenn; ++i) {
+        if (str[i] != '"'){
+            resStr.push_back(str[i]);
+        }
+    }
+    str = resStr;
+}
+
+
 
 int main(int argc, char** argv) {
+
 
     ////////////////////////////////////////////////////////////
     // collecting arguments
@@ -125,8 +227,11 @@ int main(int argc, char** argv) {
     int index_threads = arguments.indexing_threads;
 
     std::string out_by_a = arguments.out_by_a;
-    std::string yfromInit = arguments.out_by_n;
+    std::string out_by_n = arguments.out_by_n;
 
+    stringRefactor(indir);
+    stringRefactor(out_by_a);
+    stringRefactor(out_by_n);
 
 
     ////////////////////////////////////////////////////////////
@@ -137,7 +242,7 @@ int main(int argc, char** argv) {
     mt_que<std::filesystem::path> fileNameTXTqueue;
     mt_que<std::string> filesTOstring;
     size_t numfiles = 0;
-    std::string path = "./data/";
+    std::string path = indir;
     fileNameTXTqueue.set_maxsize(10000);
     filesTOstring.set_maxsize(10000);
     std::string pattern = ".+\\.txt$";
@@ -161,9 +266,7 @@ int main(int argc, char** argv) {
 
     }
 
-
-
-    /////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
 
 
     //    counting here in map from each file
@@ -187,7 +290,7 @@ int main(int argc, char** argv) {
         vecSize++;
     }
 
-
+    std::vector<std::string> words;
     ///////////////////////// merging all maps into one
     for (size_t i =0; i< vecSize; ++i) {
         for ( const auto &[key, value]: vecForPromMaps[i] ) {
@@ -196,13 +299,23 @@ int main(int argc, char** argv) {
                 toFind->second += value;
             } else {
                 mainMap.insert ( std::pair<std::string,std::size_t>(key, value) );
+                words.push_back(key);
             }
         }
     }
 
-    for ( const auto &[key, value]: mainMap ) {
-        std::cout << "Key: " << key << ", Value: " << value << '\n';
-    }
+    std::sort(words.begin(), words.end(), compareString);
+
+    std::vector<std::pair<std::string, size_t>> pairs(mainMap.begin(), mainMap.end());
+    std::sort(pairs.begin(), pairs.end(), sortbysec);
+
+    size_t lenVec = pairs.size();
+
+
+    writeToFileA(words.size(), words, mainMap, out_by_a);
+    writeToFileB(lenVec, pairs, mainMap, out_by_n);
+
+
 
     return 0;
 }
