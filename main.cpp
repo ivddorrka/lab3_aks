@@ -87,7 +87,7 @@ int read(const std::string &inpFile, std::string &result) {
 }
 
 
-void splittedIntoVec(const std::string &str, std::map<std::string, std::size_t> &mapProm){
+void splittedtomap(const std::string &str, std::map<std::string, std::size_t> &mapProm){
 
     std::vector<std::string> v1;
     boost::split(v1,str,isspace);
@@ -158,11 +158,14 @@ void writeToFileB(size_t vecSize, const std::vector<std::pair<std::string, std::
             vecSplitted.emplace_back(promOne);
             promOne.clear();
             promOne.emplace_back(std::make_pair(wordB[i].first, wordB[i].second));
+            if (i == vecSize-1) {
+                vecSplitted.emplace_back(promOne);
+            }
         }
     }
 
     std::ofstream myfile;
-    size_t count;
+//    size_t count;
     myfile.open(filePathB);
 
     for (auto & j : vecSplitted) {
@@ -204,7 +207,7 @@ void stringRefactor (std::string &str) {
 }
 
 
-void merge_maps(std::map<std::string, size_t> &local_map, std::map<std::string, size_t>* global_map, std::mutex &mtx) {
+void merge_maps(std::map<std::string, size_t> &local_map, std::map<std::string, size_t> *global_map, std::mutex &mtx) {
     mtx.lock();
     std::map<std::string, size_t>::iterator itr;
     for (itr = local_map.begin(); itr != local_map.end(); itr++) {
@@ -216,36 +219,76 @@ void merge_maps(std::map<std::string, size_t> &local_map, std::map<std::string, 
     mtx.unlock();
 }
 
-void threaded_idx(mt_que<std::string> &q, std::map<std::string, size_t>* global_map, std::mutex &mtx) {
+void threaded_idx(mt_que<std::string> &q, std::map<std::string, size_t> &global_map, std::mutex &mtx) {
     std::map<std::string, size_t> num_words;
-    const std::string delim = "";
-    std::string cur_word;
-    std::stringstream str_strm(q.deque());
-    while(true) {
 
-        if (!(str_strm >> cur_word)) {
-            q.enque(delim);
-            break;
-        }
-        else
-            num_words[cur_word] += 1;
-
-        while (str_strm >> cur_word)
-            num_words[cur_word] += 1;
-
-    }
-    merge_maps(num_words, global_map, mtx);
+    std::string promString = q.deque();
+    splittedtomap(promString, num_words);
+    merge_maps(num_words, &global_map, std::ref(mtx));
 }
 
-void threaded_indexing(mt_que<std::string> &q, std::map<std::string, size_t>* global_map, const size_t num_thr){
+void threaded_indexing(mt_que<std::string> &q, std::map<std::string, size_t> &global_map, const size_t num_thr){
     std::mutex mtx;
     std::vector<std::thread> threads_v;
 
     for (size_t i = 0; i < num_thr; i++)
-        threads_v.emplace_back(threaded_idx, std::ref(q), std::ref(mtx));
+        threads_v.emplace_back(std::thread(threaded_idx, std::ref(q), std::ref(global_map), std::ref(mtx)));
 
     for (size_t i = 0; i < num_thr; i++)
         threads_v[i].join();
+
+}
+
+void createFileQueue(const std::string &indir, mt_que<std::filesystem::path> &fileNameTXTqueue, mt_que<std::string> &filesTOstring) {
+    size_t numfiles = 0;
+    fileNameTXTqueue.set_maxsize(10000);
+    filesTOstring.set_maxsize(10000);
+    std::string pattern = ".+\\.txt$";
+    for (const auto & file : std::filesystem::recursive_directory_iterator(indir)){
+        std::string subject = file.path();
+        const std::regex e(pattern);
+        if (regex_match(subject, e)) {
+            fileNameTXTqueue.enque(subject);
+            numfiles++;
+        }
+    }
+
+    std::string permlink;
+    std::string fileName;
+
+    for (size_t i =0; i< numfiles; ++i) {
+
+        fileName = fileNameTXTqueue.deque();
+        read(fileName, permlink);
+        filesTOstring.enque(permlink);
+
+    }
+}
+
+
+int linearAlgorithm( mt_que<std::string> &filesTOstring, std::map<std::string, std::size_t> &mainMap ){
+
+    //    std::map<std::string, std::size_t> promMap;
+    //    vector where maps for each
+    std::cout << "Linear" << "\n";
+    std::vector<std::map<std::string, std::size_t>> vecForPromMaps;
+    while (filesTOstring.get_size() > 0) {
+        std::string str = filesTOstring.deque();
+        std::map<std::string, std::size_t> promMap;
+        std::cout<< "Size is = " << filesTOstring.get_size() << "\n";
+        // promMap is std::map<std::string, size_t> stores
+        // from the each txt file - word and the number of its repetitions
+        splittedtomap(str, promMap);
+
+        for ( const auto &[key, value]: promMap ) {
+            auto toFind = mainMap.find(key);
+            if ( toFind != mainMap.end() ) {
+                toFind->second += value;
+            } else {
+                mainMap.insert ( std::pair<std::string,std::size_t>(key, value) );
+            }
+        }
+    }
 
 
 }
@@ -280,39 +323,69 @@ int main(int argc, char** argv) {
     stringRefactor(out_by_a);
     stringRefactor(out_by_n);
 
+    mt_que<std::filesystem::path> fileNameTXTqueue;
+    std::map<std::string, std::size_t> mainMap;
+    mt_que<std::string> filesTOstring;
+
+//    createFileQueue(indir, fileNameTXTqueue, filesTOstring);/
+    createFileQueue(indir, fileNameTXTqueue, filesTOstring);
+    if (index_threads==1) {
+        linearAlgorithm(filesTOstring, mainMap);
+    } else {
+        threaded_indexing(filesTOstring, mainMap, index_threads);
+    }
+
+    std::vector<std::string> words;
+
+    for(auto & it : mainMap) {
+        words.push_back(it.first);
+    }
+
+    std::sort(words.begin(), words.end(), compareString);
+
+    writeToFileA(words.size(), words, mainMap, out_by_a);
+
+
+    std::vector<std::pair<std::string, size_t>> pairs(mainMap.begin(), mainMap.end());
+    std::sort(pairs.begin(), pairs.end(), sortbysec);
+    size_t lenVec = pairs.size();
+
+    writeToFileB(lenVec, pairs, mainMap, out_by_n);
 
     ////////////////////////////////////////////////////////////
     //  here file contents as strings are passed to filesTOstring Queue
     //  fileNameTXTqueue - queue for txt filenames from the given directory and all its subdirectories
 
 
-    mt_que<std::filesystem::path> fileNameTXTqueue;
-    mt_que<std::string> filesTOstring;
-    size_t numfiles = 0;
-    std::string path = indir;
-    fileNameTXTqueue.set_maxsize(10000);
-    filesTOstring.set_maxsize(10000);
-    std::string pattern = ".+\\.txt$";
-    for (const auto & file : std::filesystem::recursive_directory_iterator(path)){
-        std::string subject = file.path();
-        const std::regex e(pattern);
-        if (regex_match(subject, e)) {
-            fileNameTXTqueue.enque(subject);
-            numfiles++;
-        }
-    }
+//    mt_que<std::filesystem::path> fileNameTXTqueue;
+//    mt_que<std::string> filesTOstring;
+//    size_t numfiles = 0;
+//    std::string path = indir;
+//    fileNameTXTqueue.set_maxsize(10000);
+//    filesTOstring.set_maxsize(10000);
+//    std::string pattern = ".+\\.txt$";
+//    for (const auto & file : std::filesystem::recursive_directory_iterator(path)){
+//        std::string subject = file.path();
+//        const std::regex e(pattern);
+//        if (regex_match(subject, e)) {
+//            fileNameTXTqueue.enque(subject);
+//            numfiles++;
+//        }
+//    }
+//
+//    std::string permlink;
+//    std::string fileName;
+//
+//    for (size_t i =0; i< numfiles; ++i) {
+//
+//        fileName = fileNameTXTqueue.deque();
+//        read(fileName, permlink);
+//        filesTOstring.enque(permlink);
+//
+//    }
 
-    std::string permlink;
-    std::string fileName;
 
-    for (size_t i =0; i< numfiles; ++i) {
-
-        fileName = fileNameTXTqueue.deque();
-        read(fileName, permlink);
-        filesTOstring.enque(permlink);
-
-    }
-
+/*
 /////////////////////////////////////////////////////////////////
 
 
@@ -362,7 +435,7 @@ int main(int argc, char** argv) {
     writeToFileA(words.size(), words, mainMap, out_by_a);
     writeToFileB(lenVec, pairs, mainMap, out_by_n);
 
-
+*/
 
     return 0;
 }
