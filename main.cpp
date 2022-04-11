@@ -6,6 +6,7 @@
 #include <regex>
 #include <fstream>
 #include <map>
+#include <thread>
 #include <boost/algorithm/string.hpp>
 #include "file_parser/file_prs.h"
 
@@ -203,6 +204,52 @@ void stringRefactor (std::string &str) {
 }
 
 
+void merge_maps(std::map<std::string, size_t> &local_map, std::map<std::string, size_t>* global_map, std::mutex &mtx) {
+    mtx.lock();
+    std::map<std::string, size_t>::iterator itr;
+    for (itr = local_map.begin(); itr != local_map.end(); itr++) {
+        if (!global_map->count(itr->first))
+            global_map->insert(*itr);
+        else
+            global_map->at(itr->first) += itr->second;
+    }
+    mtx.unlock();
+}
+
+void threaded_idx(mt_que<std::string> &q, std::map<std::string, size_t>* global_map, std::mutex &mtx) {
+    std::map<std::string, size_t> num_words;
+    const std::string delim = "";
+    std::string cur_word;
+    std::stringstream str_strm(q.deque());
+    while(true) {
+
+        if (!(str_strm >> cur_word)) {
+            q.enque(delim);
+            break;
+        }
+        else
+            num_words[cur_word] += 1;
+
+        while (str_strm >> cur_word)
+            num_words[cur_word] += 1;
+
+    }
+    merge_maps(num_words, global_map, mtx);
+}
+
+void threaded_indexing(mt_que<std::string> &q, std::map<std::string, size_t>* global_map, const size_t num_thr){
+    std::mutex mtx;
+    std::vector<std::thread> threads_v;
+
+    for (size_t i = 0; i < num_thr; i++)
+        threads_v.emplace_back(threaded_idx, std::ref(q), std::ref(mtx));
+
+    for (size_t i = 0; i < num_thr; i++)
+        threads_v[i].join();
+
+
+}
+
 
 int main(int argc, char** argv) {
 
@@ -211,8 +258,8 @@ int main(int argc, char** argv) {
     // collecting arguments
     std::string fl;
     if (argc <2) {
-        assert_file_exist("./index.cfg");
-        fl = "./index.cfg";
+        assert_file_exist("./data/index.cfg");
+        fl = "./data/index.cfg";
     } else {
         fl = argv[1];
     }
